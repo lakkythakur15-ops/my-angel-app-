@@ -6,105 +6,67 @@ import plotly.graph_objects as go
 
 # --- 1. सुरक्षा और लॉगिन सेटिंग्स ---
 def check_password():
-    """रिटर्न True अगर यूजरनेम और पासवर्ड सही हैं"""
-    def password_entered():
-        """चेक करता है कि क्या क्रेडेंशियल्स मैच हो रहे हैं"""
-        if (st.session_state["username"] == "Jagannath" and 
-            st.session_state["password"] == "Chakanain@1122"):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # सुरक्षा के लिए पासवर्ड हटा दें
-            del st.session_state["username"]
-        else:
-            st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
-        # लॉगिन फॉर्म दिखाना
         st.title("🔐 Secure Pro Trader - Login")
-        st.text_input("Username", on_change=password_entered, key="username")
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if u == "Jagannath" and p == "Chakanain@1122":
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("❌ गलत विवरण")
         return False
-    elif not st.session_state["password_correct"]:
-        # गलत पासवर्ड होने पर दोबारा फॉर्म दिखाना
-        st.title("🔐 Secure Pro Trader - Login")
-        st.text_input("Username", on_change=password_entered, key="username")
-        st.text_input("Password", type="password", on_change=password_entered, key="password")
-        st.error("❌ यूजरनेम या पासवर्ड गलत है।")
-        return False
-    else:
-        return True
+    return True
 
-# --- लॉगिन चेक करें ---
 if check_password():
-    # --- 2. मुख्य ऐप का हिस्सा (अगर लॉगिन सफल है) ---
-    st.set_page_config(page_title="Secure Pro Trader - Operator Radar", layout="wide")
+    st.set_page_config(page_title="Secure Pro Trader", layout="wide")
+    st.sidebar.success("Welcome, Jagannath!")
+    
+    # साइडबार इनपुट
+    symbol = st.sidebar.text_input("सिंबल (e.g. ^NSEI, SBIN.NS)", "^NSEI")
+    tf = st.sidebar.selectbox("टाइमफ्रेम", ["15m", "30m", "1h", "1d"])
 
-    st.sidebar.success(f"Welcome, Jagannath!")
-    st.title("🏹 Operator Trap Radar - Live")
-    st.markdown("---")
-
-    # साइडबार सेटिंग्स
-    st.sidebar.header("Trading Settings")
-    symbol = st.sidebar.text_input("स्टॉक सिंबल (e.g. ^NSEI, RELIANCE.NS)", "^NSEI")
-    timeframe = st.sidebar.selectbox("टाइमफ्रेम चुनें", ["15m", "30m", "1h", "1d"], index=0)
-    period = st.sidebar.selectbox("कितने दिन का डेटा?", ["5d", "1mo", "3mo"], index=0)
-
-    # डेटा डाउनलोड फंक्शन (कैशिंग के साथ)
     @st.cache_data(ttl=300)
-    def get_live_data(ticker, tf, prd):
+    def get_data(ticker, interval):
         try:
-            data = yf.download(ticker, period=prd, interval=tf, progress=False)
-            return data
-        except Exception as e:
+            # डेटा डाउनलोड
+            df = yf.download(ticker, period="1mo", interval=interval, progress=False)
+            # मल्टी-इंडेक्स कॉलम को साफ़ करना (Pandas Fix)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            return df
+        except:
             return pd.DataFrame()
 
-    df = get_live_data(symbol, timeframe, period)
+    df = get_data(symbol, tf)
 
-    # सुरक्षा कवच
-    if df is None or df.empty:
-        st.error(f"⚠️ {symbol} के लिए डेटा नहीं मिल पाया।")
+    # एरर चेक
+    if df.empty or len(df) < 21:
+        st.error(f"⚠️ {symbol} का डेटा नहीं मिला। कृपया सिंबल चेक करें।")
         st.stop()
 
-    # इंडिकेटर्स कैलकुलेशन
-    df['Resistance'] = df['High'].rolling(window=20).max().shift(1)
-    df['Support'] = df['Low'].rolling(window=20).min().shift(1)
-    df['Avg_Volume'] = df['Volume'].rolling(window=20).mean()
-    df['Buy_Signal'] = False
-    df['Sell_Signal'] = False
+    # कैलकुलेशन (S/R और Volume)
+    df['Resist'] = df['High'].rolling(20).max().shift(1)
+    df['Supp'] = df['Low'].rolling(20).min().shift(1)
+    df['Vol_Avg'] = df['Volume'].rolling(20).mean()
 
-    # ट्रैप डिटेक्शन लॉजिक
-    for i in range(20, len(df)):
-        vol_spike = df['Volume'].iloc[i] > (df['Avg_Volume'].iloc[i] * 1.5)
-        buy_hunt = df['Low'].iloc[i] < df['Support'].iloc[i]
-        buy_absorb = df['Close'].iloc[i] > df['Support'].iloc[i]
-        if buy_hunt and buy_absorb and vol_spike:
-            df.iloc[i, df.columns.get_loc('Buy_Signal')] = True
+    # सिग्नल्स (Ambiguity Error को रोकने के लिए .values का उपयोग)
+    df['Buy_Sig'] = (df['Low'] < df['Supp']) & (df['Close'] > df['Supp']) & (df['Volume'] > df['Vol_Avg'] * 1.5)
+    df['Sell_Sig'] = (df['High'] > df['Resist']) & (df['Close'] < df['Resist']) & (df['Volume'] > df['Vol_Avg'] * 1.5)
 
-        sell_hunt = df['High'].iloc[i] > df['Resistance'].iloc[i]
-        sell_absorb = df['Close'].iloc[i] < df['Resistance'].iloc[i]
-        if sell_hunt and sell_absorb and vol_spike:
-            df.iloc[i, df.columns.get_loc('Sell_Signal')] = True
-
-    # चार्ट बनाना
+    # चार्ट
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['Support'], line=dict(color='green', width=1, dash='dot'), name='Support'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['Resistance'], line=dict(color='red', width=1, dash='dot'), name='Resistance'))
+    
+    # ट्रैप मार्कर्स
+    buys = df[df['Buy_Sig']]
+    sells = df[df['Sell_Sig']]
+    
+    fig.add_trace(go.Scatter(x=buys.index, y=buys['Low'], mode='markers', marker=dict(symbol='triangle-up', size=12, color='green'), name='Buy Trap'))
+    fig.add_trace(go.Scatter(x=sells.index, y=sells['High'], mode='markers', marker=dict(symbol='triangle-down', size=12, color='red'), name='Sell Trap'))
 
-    # सिग्नल्स
-    buy_indices = df[df['Buy_Signal']].index
-    for idx in buy_indices:
-        fig.add_annotation(x=idx, y=df.loc[idx, 'Low'], text="⬆️ BUY TRAP", showarrow=True, arrowhead=1, arrowcolor="green")
-
-    sell_indices = df[df['Sell_Signal']].index
-    for idx in sell_indices:
-        fig.add_annotation(x=idx, y=df.loc[idx, 'High'], text="⬇️ SELL TRAP", showarrow=True, arrowhead=1, arrowcolor="red")
-
-    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False)
+    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
-
-    # डैशबोर्ड जानकारी
-    col1, col2 = st.columns(2)
-    with col1:
-        st.success(f"कुल Buy सिग्नल्स: {df['Buy_Signal'].sum()}")
-    with col2:
-        st.error(f"कुल Sell सिग्नल्स: {df['Sell_Signal'].sum()}")
+    
+    st.write(f"अंतिम क्लोजिंग प्राइस: {df['Close'].iloc[-1]:.2f}")
